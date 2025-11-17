@@ -1,0 +1,16 @@
+# Build folders
+/Debug/
+/Release/
+/build/
+
+# IDE junk
+*.launch
+*.log
+
+# STM32CubeIDE
+/.settings/
+*.iworkspace
+
+# OS junk
+.DS_Store
+Thumbs.db
