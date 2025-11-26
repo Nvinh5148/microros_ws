@@ -37,9 +37,9 @@ Since the system uses Docker, you need to grant the necessary permissions to the
 
 Open a new terminal (**T1**) and run:
 
-```bash
 sudo chmod 666 /var/run/docker.sock
-```bash
+
+
 ### Step 2: Run micro-ROS Agent (Terminal 2)
 
 Connect your STM32 board to the computer via USB. Ensure it is detected as `/dev/ttyUSB0`.
