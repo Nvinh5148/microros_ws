@@ -52,7 +52,7 @@ cd ~/microros_ws
 ```
 # Source the ROS 2 environment
 ```bash
-source install/local_setup.bash
+source /home/vinh/microros_ws/install/local_setup.bash
 ```
 # Run the micro-ROS agent via Serial connection
 ```bash
