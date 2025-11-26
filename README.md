@@ -39,19 +39,22 @@ Open a new terminal (**T1**) and run:
 
 ```bash
 sudo chmod 666 /var/run/docker.sock
-
+```bash
 ### Step 2: Run micro-ROS Agent (Terminal 2)
 
 Connect your STM32 board to the computer via USB. Ensure it is detected as `/dev/ttyUSB0`.
 
 Open a second terminal (**T2**), navigate to your workspace, source the setup file, and run the agent:
 
-```bash
 # Navigate to the workspace
+```bash
 cd ~/microros_ws
-
+```bash
 # Source the ROS 2 environment
+```bash
 source install/local_setup.bash
-
+```bash
 # Run the micro-ROS agent via Serial connection
+```bash
 ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyUSB0
+```bash
