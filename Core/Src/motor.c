@@ -59,7 +59,7 @@ void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim)
     float rev = (float)diff / (float)tmotor->ipulse_per_round;
     // Vận tốc tuyến tính (m/s)
     tmotor->dvelocity = rev / SAMPLING_TIME * WHEEL_CIRCUMFERENCE;
-    tmotor->dposition += rev * NUMBER_OF_DEGREES_ON_A_CIRCLE;
+    tmotor->dposition += rev * NUMBER_OF_DEGREES_ON_A_CIRCLE * DEG_TO_RAD;
 }
 
 void MotorSetDuty1(int nDuty)

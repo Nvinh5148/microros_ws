@@ -31,7 +31,13 @@
 #include <rmw_microros/rmw_microros.h>
 #include <std_msgs/msg/float32.h>
 #include <geometry_msgs/msg/twist.h>
+#include <geometry_msgs/msg/twist_stamped.h> // <-- THÊM DÒNG NÀY
 #include <std_msgs/msg/int32.h>
+
+#include <sensor_msgs/msg/joint_state.h> // <--- THAY ĐỔI
+#include <rosidl_runtime_c/string_functions.h> // Để xử lý chuỗi tên
+
+#include <math.h>
 
 #include "stdio.h"
 #include "string.h"
@@ -45,7 +51,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TICKS_TO_RAD (2.0f * 3.14159265f / (float)PPR)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -74,8 +80,15 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+int64_t total_ticks_left = 0;
+int64_t total_ticks_right = 0;
+uint16_t last_counter_left = 0;
+uint16_t last_counter_right = 0;
 
-
+// Bộ nhớ cho JointState (4 khớp)
+double joint_position_buffer[4];
+double joint_velocity_buffer[4];
+rosidl_runtime_c__String joint_name_buffer[4];
 
 /* USER CODE END PV */
 
@@ -623,11 +636,32 @@ void * microros_allocate(size_t size, void * state);
 void microros_deallocate(void * pointer, void * state);
 void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
+
+// --- HÀM MỚI: Cập nhật tổng xung (Xử lý việc tràn số của Timer 16-bit) ---
+void update_encoder_cumulative(TIM_HandleTypeDef *htim, uint16_t *last_counter, int64_t *total_ticks)
+{
+    uint16_t current_counter = __HAL_TIM_GET_COUNTER(htim);
+    // Ép kiểu sang int16_t để tính khoảng cách ngắn nhất giữa 2 lần đọc
+    // Ví dụ: Counter nhảy từ 65535 về 5 -> diff sẽ dương 6 (đúng logic xe tiến)
+    int16_t diff = (int16_t)(current_counter - *last_counter);
+
+    *total_ticks += diff;
+    *last_counter = current_counter;
+}
+// --------------------------------------------------------------------------
 void cmd_vel_callback(const void *msgin)
 {
-    const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-    target_speed = msg->linear.x;
-    target_angle = msg->angular.z;
+
+
+    //const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
+    // 1. Ép kiểu sang TwistStamped
+    const geometry_msgs__msg__TwistStamped * msg = (const geometry_msgs__msg__TwistStamped *)msgin;
+    //target_speed = msg->linear.x;
+    //target_angle = msg->angular.z;
+    // 2. Truy xuất dữ liệu (Lưu ý: phải qua lớp .twist)
+    target_speed = msg->twist.linear.x;  // Thay vì msg->linear.x
+    target_angle = msg->twist.angular.z; // Thay vì msg->angular.z
+
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
 }
 
@@ -673,47 +707,95 @@ void StartDefaultTask(void *argument)
 
   rcl_publisher_t feedback_pub1;
   rcl_publisher_t feedback_pub2;
+
+
+    // -----------------------------
   rcl_subscription_t cmd_sub;
   rclc_executor_t executor;
 
 
-  geometry_msgs__msg__Twist cmd_vel_msg;
+  //geometry_msgs__msg__Twist cmd_vel_msg;
+  geometry_msgs__msg__TwistStamped cmd_vel_msg; // <-- MỚI
   std_msgs__msg__Float32 feedback_msg1;
   std_msgs__msg__Float32 feedback_msg2;
 
-  allocator = rcl_get_default_allocator();
 
+  // -- KHAI BÁO BIẾN CHO JOINT STATE --
+    rcl_publisher_t joint_pub;
+    sensor_msgs__msg__JointState joint_msg;
+  // -----------------------------------
+  // -- INIT JOINT STATE MSG (Cấp phát bộ nhớ 1 lần) --
+      // 1. Cấu hình mảng tên (Name)
+      static const char* frame_names[] = {
+          "rear_left_wheel_joint",
+          "rear_right_wheel_joint",
+          "front_left_steering_joint",
+          "front_right_steering_joint"
+      };
+      // Gán bộ nhớ đệm (Buffer)
+        joint_msg.name.capacity = 4;
+        joint_msg.name.size = 4;
+        joint_msg.name.data = joint_name_buffer;
+
+        joint_msg.position.capacity = 4;
+        joint_msg.position.size = 4;
+        joint_msg.position.data = joint_position_buffer;
+
+        joint_msg.velocity.capacity = 4;
+        joint_msg.velocity.size = 4;
+        joint_msg.velocity.data = joint_velocity_buffer;
+
+        joint_msg.effort.capacity = 0;
+        joint_msg.effort.size = 0;
+
+        // Khởi tạo chuỗi tên Joint (Name String Init)
+        for(int i=0; i<4; i++) {
+            rosidl_runtime_c__String__init(&joint_msg.name.data[i]);
+            rosidl_runtime_c__String__assign(&joint_msg.name.data[i], frame_names[i]);
+        }
+
+        // Khởi tạo Frame ID (Header String Init) - SỬA LẠI CHO CHUẨN
+        rosidl_runtime_c__String__init(&joint_msg.header.frame_id);
+        rosidl_runtime_c__String__assign(&joint_msg.header.frame_id, "base_link");
+
+
+  allocator = rcl_get_default_allocator();
   //create init_options
   rclc_support_init(&support, 0, NULL, &allocator);
-
   // create node
   rclc_node_init_default(&node, "cubemx_node", "", &support);
-
   // create publisher
   rclc_publisher_init_default(
     &publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cubemx_publisher");
-
   rclc_publisher_init_default(
       &feedback_pub1,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
       "motor1_feedback");
-
   rclc_publisher_init_default(
       &feedback_pub2,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
       "motor2_feedback");
-
+  // -- TẠO PUBLISHER --
+  rclc_publisher_init_default(
+      &joint_pub,
+      &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
+      "joint_states"); // Topic chuẩn của ROS là "joint_states"
+   // -------------------
   rclc_subscription_init_default(
       &cmd_sub,
       &node,
-      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-      "cmd_vel");
-  rclc_executor_init(&executor, &support.context, 2, &allocator);
+      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, TwistStamped),
+      "ackermann_controller/cmd_vel");
+
+  // 6. KHỞI TẠO EXECUTOR
+  // Số lượng handle = 1 subscription (cmd_vel)
+  rclc_executor_init(&executor, &support.context, 1, &allocator);
   rclc_executor_add_subscription(&executor, &cmd_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
   /* --- Hardware init --- */
   motor_init(&motor1, PPR);
@@ -722,10 +804,17 @@ void StartDefaultTask(void *argument)
   pid_init(&pid_vel2,1800.0f, 1200.0f, 1.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
   motor_init(&motor_steering, PPR_1);
   pid_init(&pid_pos,100.0f, 0.0f, 0.0f, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-
+  // --- SỬA LỖI NHẢY SỐ: Đồng bộ giá trị counter lần đầu ---
+    last_counter_left = __HAL_TIM_GET_COUNTER(&htim2);
+    last_counter_right = __HAL_TIM_GET_COUNTER(&htim3);
+  // --------------------------------------------------------
   for(;;)
   {
 	  	  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
+
+	  	  update_encoder_cumulative(&htim2, &last_counter_left, &total_ticks_left);
+	  	  update_encoder_cumulative(&htim3, &last_counter_right, &total_ticks_right);
+
 	  	  motor_read_encoder(&motor1, &htim2);
 	  	  motor_read_encoder(&motor2, &htim3);
 	  	  motor_read_encoder(&motor_steering, &htim4);
@@ -745,6 +834,30 @@ void StartDefaultTask(void *argument)
 	   	              if (ret2 != RCL_RET_OK) {
 	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
 	   	              }
+	   	              	  // 5. CẬP NHẬT & GỬI JOINT STATE (QUAN TRỌNG)
+
+	   	                 // Timestamp
+	   	                 int64_t time_ns = rmw_uros_epoch_nanos();
+	   	                 joint_msg.header.stamp.sec = time_ns / 1000000000;
+	   	                 joint_msg.header.stamp.nanosec = time_ns % 1000000000;
+
+	   	                 // Gán dữ liệu
+	   	                 joint_msg.position.data[0] = (double)motor1.dposition ;  // Bánh trái
+	   	                 joint_msg.position.data[1] = (double)motor2.dposition; // Bánh phải
+	   	                 joint_msg.position.data[2] = (double)motor_steering.dposition;     // Lái trái
+	   	                 joint_msg.position.data[3] = (double)motor_steering.dposition;    // Lái phải
+
+	   	                 joint_msg.velocity.data[0] = (double)motor1.dvelocity;
+	   	                 joint_msg.velocity.data[1] = (double)motor2.dvelocity;
+	   	                 joint_msg.velocity.data[2] = 0.0;
+	   	                 joint_msg.velocity.data[3] = 0.0;
+
+	   	                 // Publish
+	   	              rcl_ret_t ret3 =  rcl_publish(&joint_pub, &joint_msg, NULL);
+	   	              if (ret3 != RCL_RET_OK) {
+	   	           	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
+	   	           	   	              }
+
     osDelay(10);
   }
   /* USER CODE END 5 */

@@ -40,6 +40,7 @@ extern TIM_HandleTypeDef htim4;
 #define NUMBER_OF_DEGREES_ON_A_CIRCLE 360.0f
 #define THOUSAND 1000
 #define ZERO 0.0f
+#define DEG_TO_RAD 0.017453292519943295769236907684886f
 // Timer
 
 
