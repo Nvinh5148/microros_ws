@@ -36,9 +36,9 @@ Follow the steps below to start the micro-ROS agent and establish communication 
 Since the system uses Docker, you need to grant the necessary permissions to the Docker socket.
 
 Open a new terminal (**T1**) and run:
-
+```bash
 sudo chmod 666 /var/run/docker.sock
-
+```
 
 ### Step 2: Run micro-ROS Agent (Terminal 2)
 
@@ -49,12 +49,12 @@ Open a second terminal (**T2**), navigate to your workspace, source the setup fi
 # Navigate to the workspace
 ```bash
 cd ~/microros_ws
-```bash
+```
 # Source the ROS 2 environment
 ```bash
 source install/local_setup.bash
-```bash
+```
 # Run the micro-ROS agent via Serial connection
 ```bash
 ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyUSB0
-```bash
+```
