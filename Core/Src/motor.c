@@ -12,7 +12,6 @@ void motor_init(Motor_t *tmotor, uint32_t ipulse)
 {
     if (tmotor == NULL)
     {
-        // Handle null pointer error
         return;
     }
 
@@ -29,7 +28,6 @@ void motor_reset(Motor_t *tmotor)
 {
     if (tmotor == NULL)
     {
-        // Handle null pointer error
         return;
     }
     tmotor->icounter = 0;
@@ -44,7 +42,6 @@ void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim)
 {
 	if (tmotor == NULL || htim == NULL)
 	    {
-	        // Handle null pointer error
 	        return;
 	    }
     int32_t count = __HAL_TIM_GET_COUNTER(htim);
@@ -55,10 +52,8 @@ void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim)
         diff += 65536;
     tmotor->icounter = count;
     tmotor->last_count = count;
-    // diff/PPR = số vòng quay trong một chu kỳ
     float rev = (float)diff / (float)tmotor->ipulse_per_round;
-    // Vận tốc tuyến tính (m/s)
-    tmotor->dvelocity = rev / SAMPLING_TIME * WHEEL_CIRCUMFERENCE;
+    tmotor->dvelocity = (rev / SAMPLING_TIME) * WHEEL_CIRCUMFERENCE;
     tmotor->dposition += rev * NUMBER_OF_DEGREES_ON_A_CIRCLE * DEG_TO_RAD;
 }
 
@@ -87,15 +82,15 @@ void MotorSetDuty2(int nDuty)
 
 	if (nDuty >= 0)
 	{
-    HAL_GPIO_WritePin(IN3_GPIO_Port, IN5_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IN4_GPIO_Port, IN6_Pin, GPIO_PIN_RESET);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, nDuty);
+    HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, nDuty);
 	}
 	else
 	{
-    HAL_GPIO_WritePin(IN3_GPIO_Port, IN5_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(IN4_GPIO_Port, IN6_Pin, GPIO_PIN_SET);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, abs(nDuty));
+    HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_SET);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, abs(nDuty));
 	}
 }
 
@@ -107,15 +102,15 @@ void MotorSetDuty3(int nDuty)
 
 	if (nDuty >= 0)
 	{
-    HAL_GPIO_WritePin(IN5_GPIO_Port, IN3_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IN6_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, nDuty);
+    HAL_GPIO_WritePin(IN5_GPIO_Port, IN5_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(IN6_GPIO_Port, IN6_Pin, GPIO_PIN_RESET);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, nDuty);
 	}
 	else
 	{
-    HAL_GPIO_WritePin(IN5_GPIO_Port, IN3_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(IN6_GPIO_Port, IN4_Pin, GPIO_PIN_SET);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, abs(nDuty));
+    HAL_GPIO_WritePin(IN5_GPIO_Port, IN5_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(IN6_GPIO_Port, IN6_Pin, GPIO_PIN_SET);
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, abs(nDuty));
 	}
 }
 

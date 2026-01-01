@@ -31,14 +31,12 @@
 #include <rmw_microros/rmw_microros.h>
 #include <std_msgs/msg/float32.h>
 #include <geometry_msgs/msg/twist.h>
-#include <geometry_msgs/msg/twist_stamped.h> // <-- THÊM DÒNG NÀY
+#include <geometry_msgs/msg/twist_stamped.h>
 #include <std_msgs/msg/int32.h>
-
-#include <sensor_msgs/msg/joint_state.h> // <--- THAY ĐỔI
-#include <rosidl_runtime_c/string_functions.h> // Để xử lý chuỗi tên
-
+#include <sensor_msgs/msg/joint_state.h>
+#include <rosidl_runtime_c/string_functions.h>
+#include <geometry_msgs/msg/vector3.h> // Dùng để nhận P, I, D
 #include <math.h>
-
 #include "stdio.h"
 #include "string.h"
 #include "motor.h"
@@ -64,6 +62,7 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim8;
 
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
@@ -84,12 +83,14 @@ int64_t total_ticks_left = 0;
 int64_t total_ticks_right = 0;
 uint16_t last_counter_left = 0;
 uint16_t last_counter_right = 0;
-
-// Bộ nhớ cho JointState (4 khớp)
+volatile bool is_ros_connected = false;
+// Memory for JointState (4 joints)
 double joint_position_buffer[4];
 double joint_velocity_buffer[4];
 rosidl_runtime_c__String joint_name_buffer[4];
-
+geometry_msgs__msg__TwistStamped cmd_vel_msg;
+sensor_msgs__msg__JointState joint_msg;
+geometry_msgs__msg__Vector3 pid_msg; // Message chứa Kp, Ki, Kd
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,6 +103,7 @@ static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM8_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -110,7 +112,7 @@ void StartDefaultTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-Motor_t motor1, motor2,motor_steering;
+Motor_t motor2, motor3,motor_steering;
 PID_CONTROL_t pid_vel1, pid_vel2,pid_pos;
 volatile float target_speed;
 volatile float target_angle;
@@ -156,6 +158,7 @@ int main(void)
   MX_TIM4_Init();
   MX_USART3_UART_Init();
   MX_TIM2_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -307,6 +310,10 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
   sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
   sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
@@ -346,7 +353,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 0xffff;
+  htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
@@ -473,6 +480,52 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief TIM8 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM8_Init(void)
+{
+
+  /* USER CODE BEGIN TIM8_Init 0 */
+
+  /* USER CODE END TIM8_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM8_Init 1 */
+
+  /* USER CODE END TIM8_Init 1 */
+  htim8.Instance = TIM8;
+  htim8.Init.Prescaler = 167;
+  htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim8.Init.Period = 9999 ;
+  htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim8.Init.RepetitionCounter = 0;
+  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim8, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM8_Init 2 */
+
+  /* USER CODE END TIM8_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -588,8 +641,8 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4
-                          |GPIO_PIN_5|GPIO_PIN_6, GPIO_PIN_RESET);
+                          |GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
+                          |GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : OTG_FS_PowerSwitchOn_Pin */
   GPIO_InitStruct.Pin = OTG_FS_PowerSwitchOn_Pin;
@@ -598,12 +651,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(OTG_FS_PowerSwitchOn_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : B1_Pin */
-  GPIO_InitStruct.Pin = B1_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_EVT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : BOOT1_Pin */
   GPIO_InitStruct.Pin = BOOT1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -611,11 +658,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(BOOT1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
-                           PD1 PD2 PD3 PD4
-                           PD5 PD6 */
+                           PD0 PD1 PD2 PD3
+                           PD4 PD5 */
   GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3|GPIO_PIN_4
-                          |GPIO_PIN_5|GPIO_PIN_6;
+                          |GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
+                          |GPIO_PIN_4|GPIO_PIN_5;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -637,34 +684,138 @@ void microros_deallocate(void * pointer, void * state);
 void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
 
-// --- HÀM MỚI: Cập nhật tổng xung (Xử lý việc tràn số của Timer 16-bit) ---
+// --- NEW FUNCTION: Update cumulative ticks (Handle 16-bit Timer overflow) ---
 void update_encoder_cumulative(TIM_HandleTypeDef *htim, uint16_t *last_counter, int64_t *total_ticks)
 {
     uint16_t current_counter = __HAL_TIM_GET_COUNTER(htim);
-    // Ép kiểu sang int16_t để tính khoảng cách ngắn nhất giữa 2 lần đọc
-    // Ví dụ: Counter nhảy từ 65535 về 5 -> diff sẽ dương 6 (đúng logic xe tiến)
     int16_t diff = (int16_t)(current_counter - *last_counter);
-
     *total_ticks += diff;
     *last_counter = current_counter;
 }
 // --------------------------------------------------------------------------
 void cmd_vel_callback(const void *msgin)
 {
-
-
-    //const geometry_msgs__msg__Twist * msg = (const geometry_msgs__msg__Twist *)msgin;
-    // 1. Ép kiểu sang TwistStamped
     const geometry_msgs__msg__TwistStamped * msg = (const geometry_msgs__msg__TwistStamped *)msgin;
-    //target_speed = msg->linear.x;
-    //target_angle = msg->angular.z;
-    // 2. Truy xuất dữ liệu (Lưu ý: phải qua lớp .twist)
-    target_speed = msg->twist.linear.x;  // Thay vì msg->linear.x
-    target_angle = msg->twist.angular.z; // Thay vì msg->angular.z
+        float v = msg->twist.linear.x;      // Vận tốc dài (v)
+        float omega = msg->twist.angular.z; // Vận tốc góc (omega)
+        target_speed = v;
 
+        // --- TÍNH GÓC LÁI ACKERMANN ---
+        // Công thức: delta = arctan((omega * L) / v)
+
+        // [QUAN TRỌNG] Kiểm tra v khác 0 để tránh lỗi chia cho 0
+        // Sử dụng fabs để lấy trị tuyệt đối (cần thư viện <math.h>)
+        if (fabs(v) > 0.01f) // Nếu xe đang chạy (v > 1cm/s)
+        {
+            target_angle = atanf((omega * 0.8) / v);
+        }
+        else
+        {
+            // Nếu xe đứng yên hoặc chạy quá chậm
+            // Option 1: Trả về 0 để bánh thẳng
+            if (fabs(omega) < 0.01f) {
+                target_angle = 0.0f;
+            }
+            // Option 2: Nếu xe đứng yên nhưng vẫn muốn bẻ lái (Test servo),
+            // thì giữ nguyên target_angle cũ hoặc xử lý logic riêng.
+            // Với Ackermann chuẩn thì xe phải lăn bánh mới bẻ lái hiệu quả.
+        }
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
 }
+// Callback nhận thông số PID từ ROS
+void pid_callback(const void * msgin)
+{
+    const geometry_msgs__msg__Vector3 * msg = (const geometry_msgs__msg__Vector3 *)msgin;
 
+    // Bắt đầu đoạn găng (Critical Section)
+    __disable_irq();
+
+    // Cập nhật cho Motor 1 (Trái)
+    pid_vel1.dkp = msg->x;
+    pid_vel1.dki = msg->y;
+    pid_vel1.dkd = msg->z;
+
+    // Reset bộ nhớ PID để áp dụng thông số mới mượt mà hơn (Tùy chọn)
+    // pid_reset(&pid_vel1);
+
+    // Cập nhật cho Motor 2 (Phải) - Giả sử 2 motor giống nhau
+    pid_vel2.dkp = msg->x;
+    pid_vel2.dki = msg->y;
+    pid_vel2.dkd = msg->z;
+    // pid_reset(&pid_vel2);
+
+    __enable_irq(); // Mở lại ngắt
+}
+// --- 2. TIMER 8 INTERRUPT FUNCTION (Runs exactly every 10ms) ---
+// This is the "Reflex Brain" - Hard Real-time
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if (htim->Instance == TIM8)
+	    {
+			// A. Always read Encoder to update position/velocity
+	        motor_read_encoder(&motor_steering, &htim2);
+	        motor_read_encoder(&motor2, &htim3);
+	        motor_read_encoder(&motor3, &htim4);
+	        // B. Safety Check
+	        if (is_ros_connected)
+	        {
+	        	// --- STATE: RUNNING ---
+	        	// Calculate PID
+	        	float duty1 = MotorPIDPosition(&motor_steering, &pid_pos,target_angle);
+	            float duty2 = MotorPIDVelocity(&motor2, &pid_vel1, target_speed);
+	            float duty3 = MotorPIDVelocity(&motor3, &pid_vel2, target_speed);
+	            // Output PWM
+	            MotorSetDuty1((int)duty1);
+	            MotorSetDuty2((int)duty2);
+	            MotorSetDuty3((int)duty3);
+	            // --- KHAI BÁO BIẾN (Đặt TRƯỚC hoặc TRONG vòng for đều được, nhưng phải có static) ---
+	        /*    static float test_angles[] = {0.0f, 0.5f, 0.7f, 0.3f, 0.0f, -0.3f, -0.5f, -0.7f, -0.3f, 0.0f};
+	            static int step_index = 0;
+	            static uint32_t last_step_time = 0;
+	            static float current_test_setpoint = 0.0f;
+
+	            // ---------------------------------------------------------
+
+	            // 1. Logic đổi góc mỗi 3 giây
+	            if (HAL_GetTick() - last_step_time >= 3000) // 3000ms = 3 giây
+	            {
+	                last_step_time = HAL_GetTick();
+
+	                // Chuyển sang góc tiếp theo trong mảng
+	                step_index++;
+	                if (step_index >= 10) // Mảng có 10 phần tử, nếu hết thì quay lại đầu
+	                {
+	                    step_index = 0;
+	                }
+
+	                current_test_setpoint = test_angles[step_index];
+	            }
+
+	            // 2. Chạy PID liên tục để giữ góc đó (QUAN TRỌNG: Không được dùng osDelay ở đây)
+	            float duty1 = MotorPIDPosition(&motor_steering, &pid_pos, current_test_setpoint);
+	            MotorSetDuty1((int)duty1); */
+
+	        }
+	        else
+	        {
+	        	// --- STATE: SAFETY (Connection lost) ---
+	        	// Stop motors immediately
+	            MotorSetDuty1(0);
+	            MotorSetDuty2(0);
+	            MotorSetDuty3(0);
+
+	            // Reset PID to avoid overshoot when reconnecting
+	            pid_reset(&pid_vel1);
+	            pid_reset(&pid_vel2);
+	            pid_reset(&pid_pos);
+
+	            // Reset Target
+	            target_speed = 0.0f;
+	            target_angle = 0.0f;
+	        }
+	    }
+
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -677,10 +828,11 @@ void cmd_vel_callback(const void *msgin)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-
-  // micro-ROS configuration
-
-  rmw_uros_set_custom_transport(
+	// Start the Timer Interrupt for PID
+	HAL_TIM_Base_Start_IT(&htim8);
+	// micro-ROS configuration
+	HAL_TIM_Base_Start_IT(&htim8);
+	rmw_uros_set_custom_transport(
     true,
     (void *) &huart2,
     cubemx_transport_open,
@@ -688,176 +840,178 @@ void StartDefaultTask(void *argument)
     cubemx_transport_write,
     cubemx_transport_read);
 
-  rcl_allocator_t freeRTOS_allocator = rcutils_get_zero_initialized_allocator();
-  freeRTOS_allocator.allocate = microros_allocate;
-  freeRTOS_allocator.deallocate = microros_deallocate;
-  freeRTOS_allocator.reallocate = microros_reallocate;
-  freeRTOS_allocator.zero_allocate =  microros_zero_allocate;
+	rcl_allocator_t freeRTOS_allocator = rcutils_get_zero_initialized_allocator();
+	freeRTOS_allocator.allocate = microros_allocate;
+	freeRTOS_allocator.deallocate = microros_deallocate;
+	freeRTOS_allocator.reallocate = microros_reallocate;
+	freeRTOS_allocator.zero_allocate =  microros_zero_allocate;
 
-  if (!rcutils_set_default_allocator(&freeRTOS_allocator)) {
+	if (!rcutils_set_default_allocator(&freeRTOS_allocator)) {
       printf("Error on default allocators (line %d)\n", __LINE__);
-  }
+	}
 
-  // micro-ROS app
+	// micro-ROS
+	rcl_publisher_t publisher;
+	rclc_support_t support;
+	rcl_allocator_t allocator;
+	rcl_node_t node;
+	rcl_publisher_t feedback_pub1;
+	rcl_publisher_t feedback_pub2;
+	rcl_subscription_t cmd_sub;
+	rclc_executor_t executor;
+	std_msgs__msg__Float32 feedback_msg1;
+	std_msgs__msg__Float32 feedback_msg2;
+	rcl_subscription_t pid_sub;
 
-  rcl_publisher_t publisher;
-  rclc_support_t support;
-  rcl_allocator_t allocator;
-  rcl_node_t node;
-
-  rcl_publisher_t feedback_pub1;
-  rcl_publisher_t feedback_pub2;
-
-
-    // -----------------------------
-  rcl_subscription_t cmd_sub;
-  rclc_executor_t executor;
-
-
-  //geometry_msgs__msg__Twist cmd_vel_msg;
-  geometry_msgs__msg__TwistStamped cmd_vel_msg; // <-- MỚI
-  std_msgs__msg__Float32 feedback_msg1;
-  std_msgs__msg__Float32 feedback_msg2;
-
-
-  // -- KHAI BÁO BIẾN CHO JOINT STATE --
+	// -- VARIABLE DECLARATION FOR JOINT STATE --
     rcl_publisher_t joint_pub;
-    sensor_msgs__msg__JointState joint_msg;
-  // -----------------------------------
-  // -- INIT JOINT STATE MSG (Cấp phát bộ nhớ 1 lần) --
-      // 1. Cấu hình mảng tên (Name)
-      static const char* frame_names[] = {
+    // -- INIT JOINT STATE MSG (Allocate memory once) --
+    // 1. Configure name array (Name)
+    static const char* frame_names[] = {
           "rear_left_wheel_joint",
           "rear_right_wheel_joint",
           "front_left_steering_joint",
           "front_right_steering_joint"
-      };
-      // Gán bộ nhớ đệm (Buffer)
-        joint_msg.name.capacity = 4;
-        joint_msg.name.size = 4;
-        joint_msg.name.data = joint_name_buffer;
+    };
+    // Assign buffer memory
+    joint_msg.name.capacity = 4;
+    joint_msg.name.size = 4;
+    joint_msg.name.data = joint_name_buffer;
 
-        joint_msg.position.capacity = 4;
-        joint_msg.position.size = 4;
-        joint_msg.position.data = joint_position_buffer;
+    joint_msg.position.capacity = 4;
+    joint_msg.position.size = 4;
+    joint_msg.position.data = joint_position_buffer;
 
-        joint_msg.velocity.capacity = 4;
-        joint_msg.velocity.size = 4;
-        joint_msg.velocity.data = joint_velocity_buffer;
+    joint_msg.velocity.capacity = 4;
+    joint_msg.velocity.size = 4;
+    joint_msg.velocity.data = joint_velocity_buffer;
 
-        joint_msg.effort.capacity = 0;
-        joint_msg.effort.size = 0;
+    joint_msg.effort.capacity = 0;
+    joint_msg.effort.size = 0;
+    // Initialize Joint Name strings
+    for(int i=0; i<4; i++) {
+         rosidl_runtime_c__String__init(&joint_msg.name.data[i]);
+         rosidl_runtime_c__String__assign(&joint_msg.name.data[i], frame_names[i]);
+    }
 
-        // Khởi tạo chuỗi tên Joint (Name String Init)
-        for(int i=0; i<4; i++) {
-            rosidl_runtime_c__String__init(&joint_msg.name.data[i]);
-            rosidl_runtime_c__String__assign(&joint_msg.name.data[i], frame_names[i]);
-        }
+    	// Initialize Frame ID (Header String Init) - FIXED TO STANDARD
+    rosidl_runtime_c__String__init(&joint_msg.header.frame_id);
+    rosidl_runtime_c__String__assign(&joint_msg.header.frame_id, "base_link");
 
-        // Khởi tạo Frame ID (Header String Init) - SỬA LẠI CHO CHUẨN
-        rosidl_runtime_c__String__init(&joint_msg.header.frame_id);
-        rosidl_runtime_c__String__assign(&joint_msg.header.frame_id, "base_link");
-
-
-  allocator = rcl_get_default_allocator();
-  //create init_options
-  rclc_support_init(&support, 0, NULL, &allocator);
-  // create node
-  rclc_node_init_default(&node, "cubemx_node", "", &support);
-  // create publisher
-  rclc_publisher_init_default(
+    allocator = rcl_get_default_allocator();
+    //create init_options
+    rclc_support_init(&support, 0, NULL, &allocator);
+    // create node
+    rclc_node_init_default(&node, "cubemx_node", "", &support);
+    // create publisher
+    rclc_publisher_init_default(
     &publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cubemx_publisher");
-  rclc_publisher_init_default(
+
+    rclc_publisher_init_default(
       &feedback_pub1,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
       "motor1_feedback");
-  rclc_publisher_init_default(
+
+    rclc_publisher_init_default(
       &feedback_pub2,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
       "motor2_feedback");
-  // -- TẠO PUBLISHER --
-  rclc_publisher_init_default(
+
+    rclc_publisher_init_default(
       &joint_pub,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
-      "joint_states"); // Topic chuẩn của ROS là "joint_states"
-   // -------------------
-  rclc_subscription_init_default(
+      "joint_states");
+
+    rclc_subscription_init_default(
       &cmd_sub,
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, TwistStamped),
       "ackermann_controller/cmd_vel");
+    rclc_subscription_init_default(
+      &pid_sub,
+      &node,
+      ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3),
+      "pid_vel_tuning");
 
-  // 6. KHỞI TẠO EXECUTOR
-  // Số lượng handle = 1 subscription (cmd_vel)
-  rclc_executor_init(&executor, &support.context, 1, &allocator);
-  rclc_executor_add_subscription(&executor, &cmd_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
-  /* --- Hardware init --- */
-  motor_init(&motor1, PPR);
-  pid_init(&pid_vel1,800.0f, 1000.0f, 0.1, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-  motor_init(&motor2, PPR);
-  pid_init(&pid_vel2,1800.0f, 1200.0f, 1.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-  motor_init(&motor_steering, PPR_1);
-  pid_init(&pid_pos,100.0f, 0.0f, 0.0f, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-  // --- SỬA LỖI NHẢY SỐ: Đồng bộ giá trị counter lần đầu ---
-    last_counter_left = __HAL_TIM_GET_COUNTER(&htim2);
-    last_counter_right = __HAL_TIM_GET_COUNTER(&htim3);
-  // --------------------------------------------------------
+    //INITIALIZE EXECUTOR
+    rclc_executor_init(&executor, &support.context, 2, &allocator);
+    rclc_executor_add_subscription(&executor, &cmd_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
+    rclc_executor_add_subscription(&executor, &pid_sub, &pid_msg, &pid_callback, ON_NEW_DATA);
+    /* --- Hardware init --- */
+    motor_init(&motor2, PPR);
+    pid_init(&pid_vel1,3500.0f, 150.0f, 20.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+    motor_init(&motor3, PPR);
+    pid_init(&pid_vel2,2000.0f, 335.0f, 20.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+    motor_init(&motor_steering, PPR_1);
+    pid_init(&pid_pos,2800.0f,400.0f, 30.0f, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+    // --- FIX JUMPING NUMBER ERROR: Synchronize counter value for the first time ---
+    //  last_counter_left = __HAL_TIM_GET_COUNTER(&htim3);
+    //  last_counter_right = __HAL_TIM_GET_COUNTER(&htim4);
+    // --------------------------------------------------------
+    rcl_ret_t ping_result;
+    uint32_t ping_counter = 0;
   for(;;)
   {
-	  	  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10));
 
-	  	  update_encoder_cumulative(&htim2, &last_counter_left, &total_ticks_left);
-	  	  update_encoder_cumulative(&htim3, &last_counter_right, &total_ticks_right);
+	  	  if (rmw_uros_epoch_nanos() > 0){
+	  		  	  is_ros_connected = true;
+	      }else {
+	            ping_counter++;
+	            if (ping_counter >= 100) {
+	                ping_result = rmw_uros_ping_agent(1, 1);
+	                is_ros_connected = (ping_result == RMW_RET_OK);
+	                ping_counter = 0;
+	            }
+	        }
+	  	  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
 
-	  	  motor_read_encoder(&motor1, &htim2);
-	  	  motor_read_encoder(&motor2, &htim3);
-	  	  motor_read_encoder(&motor_steering, &htim4);
-	  	  float duty1 = MotorPIDVelocity(&motor1, &pid_vel1,target_speed);
-	  	  MotorSetDuty1((int)duty1);
-	  	  float duty2 = MotorPIDVelocity(&motor2, &pid_vel2,target_speed);
-	  	  MotorSetDuty2((int)duty2);
-	  	  float duty3 = MotorPIDPosition(&motor_steering, &pid_pos,target_angle);
-	  	  MotorSetDuty3((int)duty3);
-	  	  feedback_msg1.data = motor1.dvelocity;
-	   	  feedback_msg2.data = motor2.dvelocity;
-	   	  	  	  	  rcl_ret_t ret1 = rcl_publish(&feedback_pub1, &feedback_msg1, NULL);
-	   	              if (ret1 != RCL_RET_OK) {
+	  	  if(is_ros_connected)
+	  	  {
+	  		  // Feedback PID (Get data from Motor updated by Interrupt)
+	  		  // It's best to disable interrupts briefly to copy data safely (Critical Section)
+	  		  __disable_irq();
+	  		  float v2 = motor2.dvelocity;
+	  		  float v3 = motor3.dvelocity;
+	  		  float p2 = motor2.dposition;
+	  		  float p3 = motor3.dposition;
+	  		  float p_steer = motor_steering.dposition;
+	  		  __enable_irq();
+
+	  		  feedback_msg1.data = v2;
+	  		  feedback_msg2.data = v3;
+	  		  rcl_ret_t ret1 = rcl_publish(&feedback_pub1, &feedback_msg1, NULL);
+	   	      	  if (ret1 != RCL_RET_OK) {
 	   	              printf("Error publishing motor1 feedback (line %d)\n", __LINE__);
-	   	              }
-	   	              rcl_ret_t ret2 = rcl_publish(&feedback_pub2, &feedback_msg2, NULL);
-	   	              if (ret2 != RCL_RET_OK) {
+	   	      	  }
+	   	      rcl_ret_t ret2 = rcl_publish(&feedback_pub2, &feedback_msg2, NULL);
+	   	          if (ret2 != RCL_RET_OK) {
 	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
-	   	              }
-	   	              	  // 5. CẬP NHẬT & GỬI JOINT STATE (QUAN TRỌNG)
-
-	   	                 // Timestamp
-	   	                 int64_t time_ns = rmw_uros_epoch_nanos();
-	   	                 joint_msg.header.stamp.sec = time_ns / 1000000000;
-	   	                 joint_msg.header.stamp.nanosec = time_ns % 1000000000;
-
-	   	                 // Gán dữ liệu
-	   	                 joint_msg.position.data[0] = (double)motor1.dposition ;  // Bánh trái
-	   	                 joint_msg.position.data[1] = (double)motor2.dposition; // Bánh phải
-	   	                 joint_msg.position.data[2] = (double)motor_steering.dposition;     // Lái trái
-	   	                 joint_msg.position.data[3] = (double)motor_steering.dposition;    // Lái phải
-
-	   	                 joint_msg.velocity.data[0] = (double)motor1.dvelocity;
-	   	                 joint_msg.velocity.data[1] = (double)motor2.dvelocity;
-	   	                 joint_msg.velocity.data[2] = 0.0;
-	   	                 joint_msg.velocity.data[3] = 0.0;
-
-	   	                 // Publish
-	   	              rcl_ret_t ret3 =  rcl_publish(&joint_pub, &joint_msg, NULL);
-	   	              if (ret3 != RCL_RET_OK) {
-	   	           	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
-	   	           	   	              }
-
+	   	          }
+	   	      // Timestamp
+	   	      int64_t time_ns = rmw_uros_epoch_nanos();
+	   	      joint_msg.header.stamp.sec = time_ns / 1000000000;
+	   	      joint_msg.header.stamp.nanosec = time_ns % 1000000000;
+	   	      // Assign data
+	   	      joint_msg.position.data[0] = (double)p2;  // Left wheel
+	   	      joint_msg.position.data[1] = (double)p3; // Right wheel
+	   	      joint_msg.position.data[2] = (double)p_steer;   // Left steering
+	   	      joint_msg.position.data[3] = (double)p_steer;   // Right steering
+	   	      joint_msg.velocity.data[0] = (double)v2/WHEEL_RADIUS;
+	   	      joint_msg.velocity.data[1] = (double)v3/WHEEL_RADIUS;
+	   	      joint_msg.velocity.data[2] = 0.0;
+	   	      joint_msg.velocity.data[3] = 0.0;
+	   	      // Publish
+	   	      rcl_ret_t ret3 =  rcl_publish(&joint_pub, &joint_msg, NULL);
+	   	          if (ret3 != RCL_RET_OK) {
+	   	           	  printf("Error publishing motor3 feedback (line %d)\n", __LINE__);
+	   	          }
+	  	  }
     osDelay(10);
   }
   /* USER CODE END 5 */
