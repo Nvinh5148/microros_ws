@@ -38,6 +38,26 @@ void motor_reset(Motor_t *tmotor)
     tmotor->last_count = 0;
 }
 
+// [MỚI - QUAN TRỌNG] Hàm Reset dùng khi dừng khẩn cấp
+// Nó reset các biến tính toán về 0, nhưng ĐỒNG BỘ với timer phần cứng
+// để tránh lỗi "nhảy cóc" (jump) khi tính vận tốc lần tiếp theo.
+void motor_sync_reset(Motor_t *tmotor, TIM_HandleTypeDef *htim)
+{
+    if (tmotor == NULL || htim == NULL) return;
+
+    // 1. Reset các biến trạng thái về 0 (để Odometry trên ROS về 0)
+    tmotor->dvelocity = 0.0f;
+    tmotor->dposition = 0.0f;
+    tmotor->dreference_velocity = 0.0f;
+    tmotor->dreference_position = 0.0f;
+
+    // 2. Đồng bộ Counter phần mềm với Counter phần cứng hiện tại
+    // Nếu không làm bước này, diff = current - 0 sẽ ra số rất lớn -> xe giật bắn
+    uint32_t current_hw_counter = __HAL_TIM_GET_COUNTER(htim);
+    tmotor->icounter = current_hw_counter;
+    tmotor->last_count = current_hw_counter;
+}
+
 void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim)
 {
 	if (tmotor == NULL || htim == NULL)
@@ -53,8 +73,17 @@ void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim)
     tmotor->icounter = count;
     tmotor->last_count = count;
     float rev = (float)diff / (float)tmotor->ipulse_per_round;
-    tmotor->dvelocity = (rev / SAMPLING_TIME) * WHEEL_CIRCUMFERENCE;
-    tmotor->dposition += rev * NUMBER_OF_DEGREES_ON_A_CIRCLE * DEG_TO_RAD;
+//    tmotor->dvelocity = (rev / SAMPLING_TIME) * WHEEL_CIRCUMFERENCE;
+    tmotor->dposition += (rev) * NUMBER_OF_DEGREES_ON_A_CIRCLE * DEG_TO_RAD;
+    float raw_velocity = (rev / SAMPLING_TIME) * WHEEL_CIRCUMFERENCE;
+
+        // 2. Áp dụng bộ lọc EMA
+        // Hệ số alpha (0.0 < alpha <= 1.0).
+        // - alpha = 1.0: Không lọc gì cả (lấy 100% data mới).
+        // - alpha nhỏ (vd: 0.1, 0.2): Lọc cực mượt, nhưng sẽ bị trễ pha nhẹ.
+     float alpha = 0.25f;
+
+     tmotor->dvelocity = (alpha * raw_velocity) + ((1.0f - alpha) * tmotor->dvelocity);
 }
 
 void MotorSetDuty1(int nDuty)
@@ -64,14 +93,14 @@ void MotorSetDuty1(int nDuty)
 
 	if (nDuty >= 0)
 	{
-    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_SET);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, nDuty);
 	}
 	else
 	{
-    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, abs(nDuty));
 	}
 }

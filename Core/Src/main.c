@@ -40,6 +40,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "motor.h"
+#include "user_define.h"  // <--- THÊM DÒNG NÀY VÀO
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -84,6 +85,7 @@ int64_t total_ticks_right = 0;
 uint16_t last_counter_left = 0;
 uint16_t last_counter_right = 0;
 volatile bool is_ros_connected = false;
+volatile float current_test_setpoint = 0.0f;
 // Memory for JointState (4 joints)
 double joint_position_buffer[4];
 double joint_velocity_buffer[4];
@@ -119,6 +121,7 @@ volatile float target_angle;
 extern float dkp;
 extern float dki;
 extern float dkd;
+volatile float debug_omega;
 extern float dset_point;
 /* USER CODE END 0 */
 
@@ -699,27 +702,38 @@ void cmd_vel_callback(const void *msgin)
         float v = msg->twist.linear.x;      // Vận tốc dài (v)
         float omega = msg->twist.angular.z; // Vận tốc góc (omega)
         target_speed = v;
+        debug_omega = omega;
 
         // --- TÍNH GÓC LÁI ACKERMANN ---
         // Công thức: delta = arctan((omega * L) / v)
 
         // [QUAN TRỌNG] Kiểm tra v khác 0 để tránh lỗi chia cho 0
         // Sử dụng fabs để lấy trị tuyệt đối (cần thư viện <math.h>)
-        if (fabs(v) > 0.01f) // Nếu xe đang chạy (v > 1cm/s)
-        {
-            target_angle = atanf((omega * 0.8) / v);
-        }
-        else
-        {
-            // Nếu xe đứng yên hoặc chạy quá chậm
-            // Option 1: Trả về 0 để bánh thẳng
-            if (fabs(omega) < 0.01f) {
-                target_angle = 0.0f;
+        // --- LOGIC LÁI ACKERMANN ---
+
+            // Trường hợp 1: Xe di chuyển
+            if (fabs(v) > 0.01f)
+            {
+                float raw_angle = atanf((omega * WHEELBASE) / v);
+
+                // [QUAN TRỌNG] Kẹp góc lái (Clamp) để bảo vệ Servo
+                if (raw_angle > MAX_STEER_ANGLE_RAD) target_angle = MAX_STEER_ANGLE_RAD;
+                else if (raw_angle < -MAX_STEER_ANGLE_RAD) target_angle = -MAX_STEER_ANGLE_RAD;
+                else target_angle = raw_angle;
             }
-            // Option 2: Nếu xe đứng yên nhưng vẫn muốn bẻ lái (Test servo),
-            // thì giữ nguyên target_angle cũ hoặc xử lý logic riêng.
-            // Với Ackermann chuẩn thì xe phải lăn bánh mới bẻ lái hiệu quả.
-        }
+            // Trường hợp 2: Xe đứng yên (v = 0)
+            else
+            {
+                // Cho phép bẻ lái tại chỗ để kiểm tra (Test Servo)
+                // Nếu omega != 0 thì bẻ hết lái, ngược lại trả về giữa
+                if (fabs(omega) > 0.01f) {
+                    target_angle = (omega > 0) ? MAX_STEER_ANGLE_RAD : -MAX_STEER_ANGLE_RAD;
+                } else {
+                    target_angle = 0.0f; // Trả lái về thẳng
+                }
+            }
+
+
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
 }
 // Callback nhận thông số PID từ ROS
@@ -762,22 +776,21 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	        	// --- STATE: RUNNING ---
 	        	// Calculate PID
 	        	float duty1 = MotorPIDPosition(&motor_steering, &pid_pos,target_angle);
-	            float duty2 = MotorPIDVelocity(&motor2, &pid_vel1, target_speed);
+	        	float duty2 = MotorPIDVelocity(&motor2, &pid_vel1, target_speed);
 	            float duty3 = MotorPIDVelocity(&motor3, &pid_vel2, target_speed);
 	            // Output PWM
-	            MotorSetDuty1((int)duty1);
-	            MotorSetDuty2((int)duty2);
-	            MotorSetDuty3((int)duty3);
+	           MotorSetDuty1((int)duty1);
+	           MotorSetDuty2((int)duty2);
+	           MotorSetDuty3((int)duty3);
 	            // --- KHAI BÁO BIẾN (Đặt TRƯỚC hoặc TRONG vòng for đều được, nhưng phải có static) ---
-	        /*    static float test_angles[] = {0.0f, 0.5f, 0.7f, 0.3f, 0.0f, -0.3f, -0.5f, -0.7f, -0.3f, 0.0f};
+	         /*   static float test_angles[] = {0.0f, 0.5f, 0.7f, 1.5f, 1.3f, 0.5f, 0.0f, -0.7f, -0.3f, 0.0f};
 	            static int step_index = 0;
 	            static uint32_t last_step_time = 0;
-	            static float current_test_setpoint = 0.0f;
 
 	            // ---------------------------------------------------------
 
 	            // 1. Logic đổi góc mỗi 3 giây
-	            if (HAL_GetTick() - last_step_time >= 3000) // 3000ms = 3 giây
+	            if (HAL_GetTick() - last_step_time >= 10000) // 3000ms = 3 giây
 	            {
 	                last_step_time = HAL_GetTick();
 
@@ -792,11 +805,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	            }
 
 	            // 2. Chạy PID liên tục để giữ góc đó (QUAN TRỌNG: Không được dùng osDelay ở đây)
-	            float duty1 = MotorPIDPosition(&motor_steering, &pid_pos, current_test_setpoint);
-	            MotorSetDuty1((int)duty1); */
+	            float duty3 = MotorPIDVelocity(&motor3, &pid_vel2, current_test_setpoint);*/
+	           // MotorSetDuty3(1200);
 
 	        }
-	        else
+	       else
 	        {
 	        	// --- STATE: SAFETY (Connection lost) ---
 	        	// Stop motors immediately
@@ -812,6 +825,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	            // Reset Target
 	            target_speed = 0.0f;
 	            target_angle = 0.0f;
+	            // D. [QUAN TRỌNG] Reset thông số Motor và đồng bộ Encoder
+	            // Hàm này sẽ đưa Position/Velocity về 0 nhưng giữ Last_Count đúng bằng phần cứng
+	            motor_sync_reset(&motor_steering, &htim2);
+	            motor_sync_reset(&motor2, &htim3);
+	            motor_sync_reset(&motor3, &htim4);
+
 	        }
 	    }
 
@@ -828,10 +847,17 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+    /* --- Hardware init --- */
+    motor_init(&motor2, PPR);
+    pid_init(&pid_vel1,6000.0f,6000.0f, 000.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+    motor_init(&motor3, PPR);
+    pid_init(&pid_vel2,4000.0f,7000.0f,100.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+    motor_init(&motor_steering, PPR_1);
+    pid_init(&pid_pos,18000.0f,000.0f,500.0f, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
 	// Start the Timer Interrupt for PID
 	HAL_TIM_Base_Start_IT(&htim8);
-	// micro-ROS configuration
-	HAL_TIM_Base_Start_IT(&htim8);
+	// micro-ROS configuratio
+
 	rmw_uros_set_custom_transport(
     true,
     (void *) &huart2,
@@ -861,6 +887,8 @@ void StartDefaultTask(void *argument)
 	rclc_executor_t executor;
 	std_msgs__msg__Float32 feedback_msg1;
 	std_msgs__msg__Float32 feedback_msg2;
+
+
 	rcl_subscription_t pid_sub;
 
 	// -- VARIABLE DECLARATION FOR JOINT STATE --
@@ -921,7 +949,6 @@ void StartDefaultTask(void *argument)
       &node,
       ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
       "motor2_feedback");
-
     rclc_publisher_init_default(
       &joint_pub,
       &node,
@@ -943,19 +970,15 @@ void StartDefaultTask(void *argument)
     rclc_executor_init(&executor, &support.context, 2, &allocator);
     rclc_executor_add_subscription(&executor, &cmd_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
     rclc_executor_add_subscription(&executor, &pid_sub, &pid_msg, &pid_callback, ON_NEW_DATA);
-    /* --- Hardware init --- */
-    motor_init(&motor2, PPR);
-    pid_init(&pid_vel1,3500.0f, 150.0f, 20.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-    motor_init(&motor3, PPR);
-    pid_init(&pid_vel2,2000.0f, 335.0f, 20.0, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
-    motor_init(&motor_steering, PPR_1);
-    pid_init(&pid_pos,2800.0f,400.0f, 30.0f, PID_CONTROLLER_LIMIT_MAX, PID_CONTROLLER_LIMIT_MIN, SAMPLING_TIME);
+
     // --- FIX JUMPING NUMBER ERROR: Synchronize counter value for the first time ---
     //  last_counter_left = __HAL_TIM_GET_COUNTER(&htim3);
     //  last_counter_right = __HAL_TIM_GET_COUNTER(&htim4);
     // --------------------------------------------------------
     rcl_ret_t ping_result;
     uint32_t ping_counter = 0;
+    uint32_t last_publish_time = HAL_GetTick();
+    const uint32_t PUBLISH_INTERVAL_MS = 20; // 50Hz
   for(;;)
   {
 
@@ -970,11 +993,12 @@ void StartDefaultTask(void *argument)
 	            }
 	        }
 	  	  rclc_executor_spin_some(&executor, RCL_MS_TO_NS(1));
+	  	  uint32_t current_time = HAL_GetTick();
 
-	  	  if(is_ros_connected)
+	  	  if (is_ros_connected && (current_time - last_publish_time >= PUBLISH_INTERVAL_MS))
 	  	  {
-	  		  // Feedback PID (Get data from Motor updated by Interrupt)
-	  		  // It's best to disable interrupts briefly to copy data safely (Critical Section)
+	  		  last_publish_time = current_time; // Cập nhật mốc thời gian
+
 	  		  __disable_irq();
 	  		  float v2 = motor2.dvelocity;
 	  		  float v3 = motor3.dvelocity;
@@ -993,6 +1017,7 @@ void StartDefaultTask(void *argument)
 	   	          if (ret2 != RCL_RET_OK) {
 	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
 	   	          }
+
 	   	      // Timestamp
 	   	      int64_t time_ns = rmw_uros_epoch_nanos();
 	   	      joint_msg.header.stamp.sec = time_ns / 1000000000;
@@ -1012,7 +1037,7 @@ void StartDefaultTask(void *argument)
 	   	           	  printf("Error publishing motor3 feedback (line %d)\n", __LINE__);
 	   	          }
 	  	  }
-    osDelay(10);
+    osDelay(5);
   }
   /* USER CODE END 5 */
 }

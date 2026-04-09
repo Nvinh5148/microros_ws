@@ -45,14 +45,14 @@ extern TIM_HandleTypeDef htim4;
 
 
 
-
-
+#define MAX_STEER_ANGLE_RAD  0.5236f // 30 độ tính bằng Radian
+#define WHEELBASE 0.65f           // Chiều dài cơ sở (mét)
 
 // motor
 #define PPR 4436.0f
-#define PPR_1 180000.0f
+#define PPR_1 270000.0f
 #define MAX_VELOCITY 7
-#define WHEEL_RADIUS 0.15f // 3cm
+#define WHEEL_RADIUS 0.15f
 #define WHEEL_CIRCUMFERENCE (2.0f * 3.1415926f * WHEEL_RADIUS)
 // UART
 

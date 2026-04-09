@@ -29,11 +29,13 @@ typedef struct
 void motor_init(Motor_t *tmotor, uint32_t ipulse);
 void motor_reset(Motor_t *tmotor);
 void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim);
-void ReadEncoder(Motor_t *tmotor, TIM_HandleTypeDef *htim);
+// [MỚI] Hàm reset thông số và đồng bộ counter phần cứng
+void motor_sync_reset(Motor_t *tmotor, TIM_HandleTypeDef *htim);
+
+
 void MotorSetDuty1( int duty);
 void MotorSetDuty2( int duty);
 void MotorSetDuty3( int duty);
-void motor_set_duty(int32_t iduty);
 
 
 float MotorPIDVelocity(Motor_t *tmotor, PID_CONTROL_t *tpid_ctrl, float dvelocity);
