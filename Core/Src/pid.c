@@ -27,7 +27,6 @@ void pid_reset(PID_CONTROL_t *tpid_ctrl)
 	tpid_ctrl->dresult = 0.0f;
 }
 
-// init PID
 void pid_init(PID_CONTROL_t *tpid_ctrl, float dkp, float dki, float dkd, float dlimit_max, float dlimit_min, float dts)
 {
     if (tpid_ctrl == NULL || dkp < 0.0f || dki < 0.0f || dkd < 0.0f || dts < 0.0f || dlimit_max < dlimit_min)

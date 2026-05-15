@@ -29,7 +29,6 @@ typedef struct
 void motor_init(Motor_t *tmotor, uint32_t ipulse);
 void motor_reset(Motor_t *tmotor);
 void motor_read_encoder(Motor_t *tmotor, TIM_HandleTypeDef *htim);
-// [MỚI] Hàm reset thông số và đồng bộ counter phần cứng
 void motor_sync_reset(Motor_t *tmotor, TIM_HandleTypeDef *htim);
 
 

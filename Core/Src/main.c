@@ -35,12 +35,12 @@
 #include <std_msgs/msg/int32.h>
 #include <sensor_msgs/msg/joint_state.h>
 #include <rosidl_runtime_c/string_functions.h>
-#include <geometry_msgs/msg/vector3.h> // Dùng để nhận P, I, D
+#include <geometry_msgs/msg/vector3.h>
 #include <math.h>
 #include "stdio.h"
 #include "string.h"
 #include "motor.h"
-#include "user_define.h"  // <--- THÊM DÒNG NÀY VÀO
+#include "user_define.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,13 +86,12 @@ uint16_t last_counter_left = 0;
 uint16_t last_counter_right = 0;
 volatile bool is_ros_connected = false;
 volatile float current_test_setpoint = 0.0f;
-// Memory for JointState (4 joints)
 double joint_position_buffer[4];
 double joint_velocity_buffer[4];
 rosidl_runtime_c__String joint_name_buffer[4];
 geometry_msgs__msg__TwistStamped cmd_vel_msg;
 sensor_msgs__msg__JointState joint_msg;
-geometry_msgs__msg__Vector3 pid_msg; // Message chứa Kp, Ki, Kd
+geometry_msgs__msg__Vector3 pid_msg;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -687,7 +686,6 @@ void microros_deallocate(void * pointer, void * state);
 void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
 
-// --- NEW FUNCTION: Update cumulative ticks (Handle 16-bit Timer overflow) ---
 void update_encoder_cumulative(TIM_HandleTypeDef *htim, uint16_t *last_counter, int64_t *total_ticks)
 {
     uint16_t current_counter = __HAL_TIM_GET_COUNTER(htim);
@@ -699,134 +697,77 @@ void update_encoder_cumulative(TIM_HandleTypeDef *htim, uint16_t *last_counter, 
 void cmd_vel_callback(const void *msgin)
 {
     const geometry_msgs__msg__TwistStamped * msg = (const geometry_msgs__msg__TwistStamped *)msgin;
-        float v = msg->twist.linear.x;      // Vận tốc dài (v)
-        float omega = msg->twist.angular.z; // Vận tốc góc (omega)
+        float v = msg->twist.linear.x;
+        float omega = msg->twist.angular.z;
         target_speed = v;
         debug_omega = omega;
 
-        // --- TÍNH GÓC LÁI ACKERMANN ---
-        // Công thức: delta = arctan((omega * L) / v)
-
-        // [QUAN TRỌNG] Kiểm tra v khác 0 để tránh lỗi chia cho 0
-        // Sử dụng fabs để lấy trị tuyệt đối (cần thư viện <math.h>)
-        // --- LOGIC LÁI ACKERMANN ---
-
-            // Trường hợp 1: Xe di chuyển
             if (fabs(v) > 0.01f)
             {
                 float raw_angle = atanf((omega * WHEELBASE) / v);
 
-                // [QUAN TRỌNG] Kẹp góc lái (Clamp) để bảo vệ Servo
                 if (raw_angle > MAX_STEER_ANGLE_RAD) target_angle = MAX_STEER_ANGLE_RAD;
                 else if (raw_angle < -MAX_STEER_ANGLE_RAD) target_angle = -MAX_STEER_ANGLE_RAD;
                 else target_angle = raw_angle;
             }
-            // Trường hợp 2: Xe đứng yên (v = 0)
             else
             {
-                // Cho phép bẻ lái tại chỗ để kiểm tra (Test Servo)
-                // Nếu omega != 0 thì bẻ hết lái, ngược lại trả về giữa
                 if (fabs(omega) > 0.01f) {
                     target_angle = (omega > 0) ? MAX_STEER_ANGLE_RAD : -MAX_STEER_ANGLE_RAD;
                 } else {
-                    target_angle = 0.0f; // Trả lái về thẳng
+                    target_angle = 0.0f;
                 }
             }
-
-
     HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
 }
-// Callback nhận thông số PID từ ROS
 void pid_callback(const void * msgin)
 {
     const geometry_msgs__msg__Vector3 * msg = (const geometry_msgs__msg__Vector3 *)msgin;
 
-    // Bắt đầu đoạn găng (Critical Section)
     __disable_irq();
 
-    // Cập nhật cho Motor 1 (Trái)
     pid_vel1.dkp = msg->x;
     pid_vel1.dki = msg->y;
     pid_vel1.dkd = msg->z;
 
-    // Reset bộ nhớ PID để áp dụng thông số mới mượt mà hơn (Tùy chọn)
-    // pid_reset(&pid_vel1);
-
-    // Cập nhật cho Motor 2 (Phải) - Giả sử 2 motor giống nhau
     pid_vel2.dkp = msg->x;
     pid_vel2.dki = msg->y;
     pid_vel2.dkd = msg->z;
-    // pid_reset(&pid_vel2);
 
-    __enable_irq(); // Mở lại ngắt
+    __enable_irq();
 }
-// --- 2. TIMER 8 INTERRUPT FUNCTION (Runs exactly every 10ms) ---
-// This is the "Reflex Brain" - Hard Real-time
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
 	if (htim->Instance == TIM8)
 	    {
-			// A. Always read Encoder to update position/velocity
 	        motor_read_encoder(&motor_steering, &htim2);
 	        motor_read_encoder(&motor2, &htim3);
 	        motor_read_encoder(&motor3, &htim4);
-	        // B. Safety Check
 	        if (is_ros_connected)
 	        {
-	        	// --- STATE: RUNNING ---
-	        	// Calculate PID
+
 	        	float duty1 = MotorPIDPosition(&motor_steering, &pid_pos,target_angle);
 	        	float duty2 = MotorPIDVelocity(&motor2, &pid_vel1, target_speed);
 	            float duty3 = MotorPIDVelocity(&motor3, &pid_vel2, target_speed);
-	            // Output PWM
 	           MotorSetDuty1((int)duty1);
 	           MotorSetDuty2((int)duty2);
 	           MotorSetDuty3((int)duty3);
-	            // --- KHAI BÁO BIẾN (Đặt TRƯỚC hoặc TRONG vòng for đều được, nhưng phải có static) ---
-	         /*   static float test_angles[] = {0.0f, 0.5f, 0.7f, 1.5f, 1.3f, 0.5f, 0.0f, -0.7f, -0.3f, 0.0f};
-	            static int step_index = 0;
-	            static uint32_t last_step_time = 0;
-
-	            // ---------------------------------------------------------
-
-	            // 1. Logic đổi góc mỗi 3 giây
-	            if (HAL_GetTick() - last_step_time >= 10000) // 3000ms = 3 giây
-	            {
-	                last_step_time = HAL_GetTick();
-
-	                // Chuyển sang góc tiếp theo trong mảng
-	                step_index++;
-	                if (step_index >= 10) // Mảng có 10 phần tử, nếu hết thì quay lại đầu
-	                {
-	                    step_index = 0;
-	                }
-
-	                current_test_setpoint = test_angles[step_index];
-	            }
-
-	            // 2. Chạy PID liên tục để giữ góc đó (QUAN TRỌNG: Không được dùng osDelay ở đây)
-	            float duty3 = MotorPIDVelocity(&motor3, &pid_vel2, current_test_setpoint);*/
-	           // MotorSetDuty3(1200);
 
 	        }
 	       else
 	        {
-	        	// --- STATE: SAFETY (Connection lost) ---
-	        	// Stop motors immediately
 	            MotorSetDuty1(0);
 	            MotorSetDuty2(0);
 	            MotorSetDuty3(0);
 
-	            // Reset PID to avoid overshoot when reconnecting
 	            pid_reset(&pid_vel1);
 	            pid_reset(&pid_vel2);
 	            pid_reset(&pid_pos);
 
-	            // Reset Target
 	            target_speed = 0.0f;
 	            target_angle = 0.0f;
-	            // D. [QUAN TRỌNG] Reset thông số Motor và đồng bộ Encoder
-	            // Hàm này sẽ đưa Position/Velocity về 0 nhưng giữ Last_Count đúng bằng phần cứng
+
 	            motor_sync_reset(&motor_steering, &htim2);
 	            motor_sync_reset(&motor2, &htim3);
 	            motor_sync_reset(&motor3, &htim4);
@@ -890,18 +831,13 @@ void StartDefaultTask(void *argument)
 
 
 	rcl_subscription_t pid_sub;
-
-	// -- VARIABLE DECLARATION FOR JOINT STATE --
     rcl_publisher_t joint_pub;
-    // -- INIT JOINT STATE MSG (Allocate memory once) --
-    // 1. Configure name array (Name)
     static const char* frame_names[] = {
           "rear_left_wheel_joint",
           "rear_right_wheel_joint",
           "front_left_steering_joint",
           "front_right_steering_joint"
     };
-    // Assign buffer memory
     joint_msg.name.capacity = 4;
     joint_msg.name.size = 4;
     joint_msg.name.data = joint_name_buffer;
@@ -916,22 +852,16 @@ void StartDefaultTask(void *argument)
 
     joint_msg.effort.capacity = 0;
     joint_msg.effort.size = 0;
-    // Initialize Joint Name strings
     for(int i=0; i<4; i++) {
          rosidl_runtime_c__String__init(&joint_msg.name.data[i]);
          rosidl_runtime_c__String__assign(&joint_msg.name.data[i], frame_names[i]);
     }
-
-    	// Initialize Frame ID (Header String Init) - FIXED TO STANDARD
     rosidl_runtime_c__String__init(&joint_msg.header.frame_id);
     rosidl_runtime_c__String__assign(&joint_msg.header.frame_id, "base_link");
 
     allocator = rcl_get_default_allocator();
-    //create init_options
     rclc_support_init(&support, 0, NULL, &allocator);
-    // create node
     rclc_node_init_default(&node, "cubemx_node", "", &support);
-    // create publisher
     rclc_publisher_init_default(
     &publisher,
     &node,
@@ -966,15 +896,10 @@ void StartDefaultTask(void *argument)
       ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Vector3),
       "pid_vel_tuning");
 
-    //INITIALIZE EXECUTOR
     rclc_executor_init(&executor, &support.context, 2, &allocator);
     rclc_executor_add_subscription(&executor, &cmd_sub, &cmd_vel_msg, &cmd_vel_callback, ON_NEW_DATA);
     rclc_executor_add_subscription(&executor, &pid_sub, &pid_msg, &pid_callback, ON_NEW_DATA);
 
-    // --- FIX JUMPING NUMBER ERROR: Synchronize counter value for the first time ---
-    //  last_counter_left = __HAL_TIM_GET_COUNTER(&htim3);
-    //  last_counter_right = __HAL_TIM_GET_COUNTER(&htim4);
-    // --------------------------------------------------------
     rcl_ret_t ping_result;
     uint32_t ping_counter = 0;
     uint32_t last_publish_time = HAL_GetTick();
@@ -997,7 +922,7 @@ void StartDefaultTask(void *argument)
 
 	  	  if (is_ros_connected && (current_time - last_publish_time >= PUBLISH_INTERVAL_MS))
 	  	  {
-	  		  last_publish_time = current_time; // Cập nhật mốc thời gian
+	  		  last_publish_time = current_time;
 
 	  		  __disable_irq();
 	  		  float v2 = motor2.dvelocity;
@@ -1017,12 +942,9 @@ void StartDefaultTask(void *argument)
 	   	          if (ret2 != RCL_RET_OK) {
 	   	              printf("Error publishing motor2 feedback (line %d)\n", __LINE__);
 	   	          }
-
-	   	      // Timestamp
 	   	      int64_t time_ns = rmw_uros_epoch_nanos();
 	   	      joint_msg.header.stamp.sec = time_ns / 1000000000;
 	   	      joint_msg.header.stamp.nanosec = time_ns % 1000000000;
-	   	      // Assign data
 	   	      joint_msg.position.data[0] = (double)p2;  // Left wheel
 	   	      joint_msg.position.data[1] = (double)p3; // Right wheel
 	   	      joint_msg.position.data[2] = (double)p_steer;   // Left steering
